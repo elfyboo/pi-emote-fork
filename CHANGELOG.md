@@ -2,6 +2,33 @@
 
 All notable changes to pi-emote will be documented in this file.
 
+## v0.2.10
+
+### Added
+- **Context usage progress bar** — Visual 20-segment bar with eighth-block granularity. Cache (░) and input (█) portions are shown per segment; input wins when both occupy the same bin.
+- **Cache hit rate** — Per-message cache ratio shown in the stats line (⇞).
+- **Working directory** — Current directory displayed below stats, shortened with `~`.
+- **Token count in bar** — Raw token count displayed alongside percentage.
+
+### Changed
+- **Info panel restructured** — Merged thinking level and context window into the model line. Progress bar, cumulative stats (↑↓ cache% $cost), and working directory replace the old context/tokens/cost layout.
+- **`formatTokens` uses uppercase `K`** — Kilo suffix now uppercase for consistency.
+- **Empty bin char** — Changed from `-` to space for a cleaner look.
+
+## v0.2.9
+
+### Added
+- **Red emote**
+
+### Changed
+- **hideBelow default to 40** — Fit all content in narrow terminals by default.
+- **claude emote** — Claude family of models show red emote by default.
+
+## v0.2.8
+
+### Fixed
+- **ASCII YAML escape sequences** — `\"` and `\\` in `ascii.yaml` double-quoted strings are now correctly decoded (e.g. `think hard` and `tool` frames in the default set).
+
 ## v0.2.7
 
 ### Added

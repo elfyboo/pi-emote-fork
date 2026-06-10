@@ -8,9 +8,46 @@ import { log } from "./log.js";
 
 function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 10_000) return `${Math.round(count / 1000)}k`;
-  if (count >= 1_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count >= 10_000) return `${Math.round(count / 1000)}K`;
+  if (count >= 1_000) return `${(count / 1000).toFixed(1)}K`;
   return count.toString();
+}
+
+// --- Progress bar ---
+
+function buildProgressBar(usage: any, latestCacheRead: number, latestInput: number, latestCacheWrite: number): string {
+  const segments = 20;
+  const subsPerSegment = 8;
+  const totalSubs = segments * subsPerSegment;
+  const percent = usage?.percent ?? 0;
+  
+  // Granular sub-unit fill with floor-fill minimum of one full segment
+  const filledSubs = percent === 0 ? 0 : Math.max(Math.ceil((percent / 100) * totalSubs), subsPerSegment);
+  
+  // Calculate cache vs input ratio from latest message
+  const totalPrompt = latestInput + latestCacheRead + latestCacheWrite;
+  const cacheRatio = totalPrompt > 0 ? latestCacheRead / totalPrompt : 0;
+  const cacheSubs = Math.floor(filledSubs * cacheRatio);
+  
+  const eighthBlockChars = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+  
+  const bar = Array.from({ length: segments }, (_, i) => {
+    const segStart = i * subsPerSegment;
+    const segEnd = segStart + subsPerSegment;
+    
+    const cacheInSeg = Math.max(0, Math.min(cacheSubs, segEnd) - segStart);
+    const inputInSeg = Math.max(0, Math.min(filledSubs, segEnd) - Math.max(cacheSubs, segStart));
+    
+    // If cache and input share a bin, input fills the bin at 100%
+    if (cacheInSeg > 0 && inputInSeg > 0) return '█';
+    if (inputInSeg > 0) return eighthBlockChars[inputInSeg - 1];
+    if (cacheInSeg > 0) return '░';
+    return ' ';
+  }).join('');
+  
+  const pctStr = percent.toFixed(1);
+  const tokensStr = usage?.tokens != null ? formatTokens(usage.tokens) : '?';
+  return `⏵▕${bar}▏ ${tokensStr} (${pctStr}%)`;
 }
 
 // --- Info panel ---
@@ -19,38 +56,66 @@ function buildInfoLines(width: number, config: Config, ctxRef: any, pi: any, the
   const lines: string[] = [];
   if (!ctxRef) return lines;
 
+  // Line 1: Model + thinking level + context window
   const model = ctxRef.model;
   let modelStr = model?.name ?? "no model";
   const thinkingLevel = pi.getThinkingLevel?.() ?? "high";
   if (model?.reasoning) {
     modelStr += ` • ${thinkingLevel}`;
   }
-  lines.push(theme.bold(modelStr));
-
+  
   const usage = ctxRef.getContextUsage?.();
   if (usage) {
-    const pct = usage.percent !== null ? `${usage.percent.toFixed(1)}%` : "?";
-    const tokens = usage.tokens !== null ? formatTokens(usage.tokens) : "?";
     const window = formatTokens(usage.contextWindow);
-    lines.push(`Context: ${tokens}/${window} (${pct})`);
+    modelStr += ` • ${window}`;
   }
+  lines.push(theme.bold(modelStr));
 
+  // Line 2: Progress bar
+  // Calculate cumulative totals and extract latest message stats
   let totalInput = 0;
   let totalOutput = 0;
   let totalCost = 0;
+  let latestInput = 0;
+  let latestCacheRead = 0;
+  let latestCacheWrite = 0;
+  
   try {
-    for (const entry of ctxRef.sessionManager.getEntries()) {
+    const entries = ctxRef.sessionManager.getEntries();
+    for (const entry of entries) {
       if (entry.type === "message" && entry.message.role === "assistant") {
-        totalInput += entry.message.usage?.input ?? 0;
+        const msgInput = entry.message.usage?.input ?? 0;
+        const msgCacheRead = entry.message.usage?.cacheRead ?? 0;
+        const msgCacheWrite = entry.message.usage?.cacheWrite ?? 0;
+        
+        totalInput += msgInput;
         totalOutput += entry.message.usage?.output ?? 0;
         totalCost += entry.message.usage?.cost?.total ?? 0;
+        
+        // Keep track of the latest message's stats
+        latestInput = msgInput;
+        latestCacheRead = msgCacheRead;
+        latestCacheWrite = msgCacheWrite;
       }
     }
   } catch (_) { /* ignore if not available */ }
 
-  lines.push(`↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)}`);
+  lines.push(buildProgressBar(usage, latestCacheRead, latestInput, latestCacheWrite));
 
-  lines.push(`$${totalCost.toFixed(3)}`);
+  // Line 3: Stats with cache hit rate
+  // Calculate cache hit rate using pi's formula
+  const latestPromptTokens = latestInput + latestCacheRead + latestCacheWrite;
+  const cacheHitRate = latestPromptTokens > 0 ? (latestCacheRead / latestPromptTokens) * 100 : 0;
+  
+  lines.push(`↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)} ⇞${cacheHitRate.toFixed(1)}% $${totalCost.toFixed(3)}`);
+
+  // Line 4: Current working directory
+  let pwd = ctxRef.sessionManager.getCwd?.() ?? process.cwd();
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (home && pwd.startsWith(home)) {
+    pwd = `~${pwd.slice(home.length)}`;
+  }
+  lines.push(pwd);
 
   const infoWidth = width - config.size - 5;
   return lines.map(l => {
